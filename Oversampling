@@ -1,0 +1,80 @@
+import numpy as np
+import pandas as pd
+from collections import Counter
+import matplotlib.pyplot as plt
+
+def preprocess_data(df):
+    df = df.dropna()
+    df = df[df != 'unknown']
+    cat_cols = ['dx', 'dx_type', 'sex', 'localization']
+    for col in cat_cols:
+        df[col] = pd.Categorical(df[col]).codes
+    return df
+
+def k_means(X, k, max_iters=100):
+    centroids = X[np.random.choice(range(len(X)), k, replace=False)]
+    for _ in range(max_iters):
+        labels = np.argmin(np.linalg.norm(X[:, np.newaxis] - centroids, axis=2), axis=1)
+        new_centroids = np.array([X[labels == i].mean(axis=0) if len(X[labels == i]) > 0 else np.nan for i in range(k)])
+        if np.allclose(centroids, new_centroids):
+            break
+        centroids = new_centroids
+    return centroids, labels
+
+def smote(X, y, n_synthetic):
+    synthetic_samples = []
+    while n_synthetic > 0:
+        idx = np.random.choice(len(X))
+        sample = X[idx]
+        distances = np.linalg.norm(X - sample, axis=1)
+        nn_idx = np.argsort(distances)[1]
+        nn = X[nn_idx]
+        synthetic_sample = sample + np.random.rand() * (nn - sample)
+        synthetic_samples.append(synthetic_sample)
+        n_synthetic -= 1
+    return np.array(synthetic_samples), np.full((len(synthetic_samples),), y[0])
+
+def cluster_based_oversampling(X, y):
+    class_counts = Counter(y)
+    max_count = max(class_counts.values())
+    X_resampled = []
+    y_resampled = []
+    for class_label, count in class_counts.items():
+        if count < max_count:
+            class_samples = X[y == class_label]
+            n_synthetic = max_count - count
+            X_synthetic, y_synthetic = smote(class_samples, np.full((len(class_samples),), class_label), n_synthetic)
+            X_resampled.append(X_synthetic)
+            y_resampled.append(y_synthetic)
+        else:
+            X_resampled.append(X[y == class_label])
+            y_resampled.append(np.full((count,), class_label))
+    return np.vstack(X_resampled), np.concatenate(y_resampled)
+
+df = pd.read_csv("HAM10000_metadata.csv")
+df_preprocessed = preprocess_data(df)
+X = df_preprocessed.drop(columns=['lesion_id', 'image_id', 'dx']).values
+y = df_preprocessed['dx'].values
+X_resampled, y_resampled = cluster_based_oversampling(X, y)
+resampled_df = pd.DataFrame(X_resampled, columns=df_preprocessed.drop(columns=['lesion_id', 'image_id', 'dx']).columns)
+resampled_df['dx'] = y_resampled
+combined_df = pd.concat([df_preprocessed, resampled_df], ignore_index=True)
+combined_df.to_csv("resampled_try1.csv", index=False)
+
+plt.figure(figsize=(12, 6))
+plt.subplot(1, 2, 1)
+plt.title('Data Distribution Before Oversampling')
+plt.xlabel('Class')
+plt.ylabel('Count')
+plt.hist(y, bins=len(np.unique(y)), color='blue', alpha=0.7)
+plt.xticks(np.arange(len(np.unique(y))), np.unique(y), rotation=45)
+
+plt.subplot(1, 2, 2)
+plt.title('Data Distribution After Oversampling')
+plt.xlabel('Class')
+plt.ylabel('Count')
+plt.hist(y_resampled, bins=len(np.unique(y)), color='orange', alpha=0.7)
+plt.xticks(np.arange(len(np.unique(y))), np.unique(y), rotation=45)
+
+plt.tight_layout()
+plt.show()
